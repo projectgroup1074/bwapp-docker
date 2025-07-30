@@ -1,0 +1,10 @@
+
+
+services:
+  bwapp:
+    image: raesene/bwapp
+    container_name: bwapp
+    ports:
+      - "9090:80"   # Changed from 8080:80 to 9090:80
+    restart: always
+
