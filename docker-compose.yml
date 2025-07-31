@@ -1,10 +1,33 @@
-
+version: '3.1'
 
 services:
+  mysql:
+    image: mysql:5.7
+    container_name: bwapp_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: bWAPP
+      MYSQL_USER: root
+      MYSQL_PASSWORD: root
+    volumes:
+      - mysql_data:/var/lib/mysql
+
   bwapp:
     image: raesene/bwapp
     container_name: bwapp
-    ports:
-      - "9090:80"   # Changed from 8080:80 to 9090:80
     restart: always
+    ports:
+      - "9090:80"
+    depends_on:
+      - mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: bWAPP
+      MYSQL_USER: root
+      MYSQL_PASSWORD: root
+      MYSQL_HOST: mysql
+
+volumes:
+  mysql_data:
 
