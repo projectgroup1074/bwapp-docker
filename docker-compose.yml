@@ -8,10 +8,12 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: bWAPP
-      MYSQL_USER: root
-      MYSQL_PASSWORD: root
+      MYSQL_USER: bwappuser
+      MYSQL_PASSWORD: bwapppass
     volumes:
       - mysql_data:/var/lib/mysql
+    networks:
+      - bwapp_net
 
   bwapp:
     image: raesene/bwapp
@@ -24,10 +26,16 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: bWAPP
-      MYSQL_USER: root
-      MYSQL_PASSWORD: root
+      MYSQL_USER: bwappuser
+      MYSQL_PASSWORD: bwapppass
       MYSQL_HOST: mysql
+    networks:
+      - bwapp_net
 
 volumes:
   mysql_data:
+
+networks:
+  bwapp_net:
+    driver: bridge
 
