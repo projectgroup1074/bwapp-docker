@@ -4,10 +4,21 @@ services:
     container_name: bwapp-mysql
     restart: always
     environment:
+<<<<<<< HEAD
       MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./mysql-init:/docker-entrypoint-initdb.d
+=======
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: bWAPP
+      MYSQL_USER: bwappuser
+      MYSQL_PASSWORD: bwapppass
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - bwapp_net
+>>>>>>> d36d02de1e86ca423eb675e23bf1b90f61f68751
 
   bwapp:
     image: raesene/bwapp
@@ -18,6 +29,7 @@ services:
     environment:
       MYSQL_HOST: bwapp-mysql
       MYSQL_DATABASE: bWAPP
+<<<<<<< HEAD
       MYSQL_USER: root
       MYSQL_PASSWORD: ""
     depends_on:
@@ -25,3 +37,18 @@ services:
 
 volumes:
   mysql_data:
+=======
+      MYSQL_USER: bwappuser
+      MYSQL_PASSWORD: bwapppass
+      MYSQL_HOST: mysql
+    networks:
+      - bwapp_net
+
+volumes:
+  mysql_data:
+
+networks:
+  bwapp_net:
+    driver: bridge
+
+>>>>>>> d36d02de1e86ca423eb675e23bf1b90f61f68751
