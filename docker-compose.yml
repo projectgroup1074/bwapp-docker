@@ -1,17 +1,13 @@
-version: '3.1'
-
 services:
-  mysql:
+  bwapp-mysql:
     image: mysql:5.7
-    container_name: bwapp_mysql
+    container_name: bwapp-mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: bWAPP
-      MYSQL_USER: root
-      MYSQL_PASSWORD: root
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d
 
   bwapp:
     image: raesene/bwapp
@@ -19,15 +15,13 @@ services:
     restart: always
     ports:
       - "9090:80"
-    depends_on:
-      - mysql
     environment:
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_HOST: bwapp-mysql
       MYSQL_DATABASE: bWAPP
       MYSQL_USER: root
-      MYSQL_PASSWORD: root
-      MYSQL_HOST: mysql
+      MYSQL_PASSWORD: ""
+    depends_on:
+      - bwapp-mysql
 
 volumes:
   mysql_data:
-
