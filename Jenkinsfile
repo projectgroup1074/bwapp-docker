@@ -1,67 +1,159 @@
 pipeline {
-    agent any
+agent any
 
-    environment {
-        // DefectDojo API details
-        DEFECTDOJO_URL = "http://192.168.28.140:8080"   // Change to your DefectDojo instance
-        DEFECTDOJO_API_KEY = credentials('defectdojo-api-key') // Store in Jenkins credentials
-        DEFECTDOJO_PRODUCT_ID = "1"                     // Change to your product ID in Dojo
+environment {
+NIKTO_TARGET = "http://192.168.28.141:8080"
+ZAP_TARGET = "http://192.168.28.141:9090/portal.php"
+}
 
-        // bWAPP target (Fix your correct URL here!)
-        BWAPP_URL = "http://192.168.28.140/"             // Change to actual running bWAPP path
-    }
+stages {
 
-    stages {
-        stage('Checkout') {
-            steps {
-                git branch: 'master', url: 'https://github.com/raesene/bwapp.git'
-            }
-        }
+stage('Preparation') {
+steps {
+sh "command -v node"
+sh "node -v"
+}
+}
 
-        stage('Run ZAP Scan via Docker') {
-            steps {
-                script {
-                    catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                        sh '''
-                        echo "[INFO] Pulling OWASP ZAP Docker image..."
-                        docker pull ghcr.io/zaproxy/zaproxy:stable
+stage('Checkout Code') {
+steps {
+git branch: 'main', url: 'https://github.com/projectgroup1074/bwapp-docker.git'
+}
+}
 
-                        echo "[INFO] Running OWASP ZAP baseline scan..."
-                        docker run --rm --user root --network host \
-                            -v $WORKSPACE:/zap/wrk \
-                            ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
-                            -t ${BWAPP_URL} -x zap_report.xml
-                        '''
-                    }
-                }
-            }
-        }
+stage('Trufflehog Secret Scan') {
+steps {
+sh "trufflehog3 . -f json -o trufflehog_report.json || true"
+archiveArtifacts artifacts: 'trufflehog_report.json', allowEmptyArchive: true
+}
+}
 
-        stage('Upload to DefectDojo') {
-            steps {
-                script {
-                    // Upload ZAP XML to DefectDojo
-                    sh '''
-                    echo "[INFO] Uploading ZAP results to DefectDojo..."
-                    curl -k -X POST "${DEFECTDOJO_URL}/api/v2/import-scan/" \
-                        -H "Authorization: Token ${DEFECTDOJO_API_KEY}" \
-                        -F "minimum_severity=Low" \
-                        -F "scan_type=ZAP Scan" \
-                        -F "file=@zap_report.xml" \
-                        -F "engagement=1" \
-                        -F "product_id=${DEFECTDOJO_PRODUCT_ID}" \
-                        -F "active=true" \
-                        -F "verified=false"
-                    '''
-                }
-            }
-        }
-    }
+stage('Nikto Scan') {
+steps {
+sh '''
+docker run --rm --network host \
+-v "$WORKSPACE:/nikto-output" \
+frapsoft/nikto \
+-h "$NIKTO_TARGET" \
+-o /nikto-output/nikto_report.html \
+-Format htm || true
+'''
+archiveArtifacts artifacts: 'nikto_report.html', onlyIfSuccessful: false
+}
+}
 
-    post {
-        always {
-            echo "Cleaning up Docker..."
-            sh 'docker system prune -f || true'
-        }
-    }
+stage('OWASP ZAP Scan') {
+steps {
+sh '''
+echo 'Checking if target is up...'
+for i in {1..10}; do
+if curl -s --head "$ZAP_TARGET" | grep '200 OK'; then
+echo 'Target is UP'
+break
+fi
+echo 'Waiting for target to start...'
+sleep 5
+done
+
+mkdir -p "$WORKSPACE/zap_output"
+chmod 777 "$WORKSPACE/zap_output"
+
+docker run --rm --network host \
+-v "$WORKSPACE/zap_output:/zap/wrk" \
+ghcr.io/zaproxy/zaproxy:stable \
+zap-baseline.py \
+-t "$ZAP_TARGET" \
+-r zap_report.html || true
+
+if [ -f "$WORKSPACE/zap_output/zap_report.html" ]; then
+mv "$WORKSPACE/zap_output/zap_report.html" "$WORKSPACE/zap_report.html"
+else
+echo "<html><body><h2>ZAP Scan Failed or Target Unreachable</h2></body></html>" > "$WORKSPACE/zap_report.html"
+fi
+'''
+archiveArtifacts artifacts: 'zap_report.html', onlyIfSuccessful: false
+}
+}
+
+stage('Install Sonar Scanner') {
+steps {
+script {
+echo "Installing Sonar Scanner..."
+sh """
+if [ ! -f sonar-scanner/bin/sonar-scanner ]; then
+curl -sSL -o sonar.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
+unzip -q sonar.zip
+mv sonar-scanner-5.0.1.3006-linux sonar-scanner
+rm sonar.zip
+fi
+"""
+}
+}
+}
+
+stage('SonarQube Analysis') {
+steps {
+script {
+def buildVersion = sh(script: "date +%Y%m%d%H%M%S", returnStdout: true).trim()
+
+echo "🔍 Checking if SonarQube is reachable..."
+def sonarReachable = sh(script: "curl -s -o /dev/null -w \"%{http_code}\" http://192.168.28.141:9000", returnStdout: true).trim()
+
+if (sonarReachable != "200") {
+echo "⚠️ SonarQube is NOT reachable at http://192.168.28.141:9000 (HTTP ${sonarReachable}). Skipping analysis."
+return
+}
+
+withCredentials([string(credentialsId: 'sonartoken', variable: 'SONARQUBE_TOKEN')]) {
+if (!env.SONARQUBE_TOKEN?.trim()) {
+echo "⚠️ SonarQube token is missing. Skipping analysis."
+return
+}
+
+echo "🚀 Running SonarQube analysis for version ${buildVersion}..."
+sh """
+./sonar-scanner/bin/sonar-scanner \
+-Dsonar.projectKey=bwapp-docker \
+-Dsonar.projectVersion=${buildVersion} \
+-Dsonar.sources=. \
+-Dsonar.host.url=http://192.168.28.141:9000 \
+-Dsonar.login=$SONARQUBE_TOKEN || true
+"""
+
+sleep 5
+def qgStatus = sh(script: "curl -s -u $SONARQUBE_TOKEN: http://192.168.28.141:9000/api/qualitygates/project_status?projectKey=bwapp-docker | jq -r .projectStatus.status", returnStdout: true).trim()
+writeFile file: "${env.WORKSPACE}/sonar_status.txt", text: qgStatus
+echo "SonarQube Quality Gate: ${qgStatus}"
+}
+}
+}
+}
+stage('Generate Security Dashboard') {
+steps {
+sh '''
+mkdir -p "$WORKSPACE/security_dashboard"
+build_date=$(date)
+
+echo "<html><head><title>Security Dashboard</title></head><body>" > "$WORKSPACE/security_dashboard/index.html"
+echo "<h1>Security Dashboard</h1>" >> "$WORKSPACE/security_dashboard/index.html"
+echo "<p>Generated on: $build_date</p>" >> "$WORKSPACE/security_dashboard/index.html"
+echo "<h2>Trufflehog Report</h2><a href='../trufflehog_report.json'>View JSON</a><br>" >> "$WORKSPACE/security_dashboard/index.html"
+echo "<h2>Nikto Report</h2><a href='../nikto_report.html'>View HTML</a><br>" >> "$WORKSPACE/security_dashboard/index.html"
+echo "<h2>OWASP ZAP Report</h2><a href='../zap_report.html'>View HTML</a><br>" >> "$WORKSPACE/security_dashboard/index.html"
+echo "<h2>SonarQube Report</h2><a href='http://192.168.28.141:9000/dashboard?id=bwapp-docker' target='_blank'>View on SonarQube</a><br>" >> "$WORKSPACE/security_dashboard/index.html"
+echo "</body></html>" >> "$WORKSPACE/security_dashboard/index.html"
+'''
+archiveArtifacts artifacts: 'security_dashboard/**', onlyIfSuccessful: false
+}
+}
+}
+
+post {
+always {
+echo "Pipeline finished."
+}
+failure {
+echo "Pipeline failed. Please check logs."
+}
+}
 }
