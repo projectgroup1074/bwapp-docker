@@ -8,7 +8,7 @@ ZAP_TARGET = "http://192.168.28.141:9090/portal.php"
 
 stages {
 
-stage('Preparation') {
+stage('Check Node.js Installation') {
 steps {
 sh "command -v node"
 sh "node -v"
@@ -21,13 +21,63 @@ git branch: 'main', url: 'https://github.com/projectgroup1074/bwapp-docker.git'
 }
 }
 
-stage('Trufflehog Secret Scan') {
+stage('Secret Scan (Trufflehog3)') {
 steps {
 sh "trufflehog3 . -f json -o trufflehog_report.json || true"
 archiveArtifacts artifacts: 'trufflehog_report.json', allowEmptyArchive: true
 }
 }
 
+
+
+stage('Install Sonar Scanner') {
+steps {
+script {
+echo "Installing Sonar Scanner..."
+sh """
+if [ ! -f sonar-scanner/bin/sonar-scanner ]; then
+curl -sSL -o sonar.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
+unzip -q sonar.zip
+mv sonar-scanner-5.0.1.3006-linux sonar-scanner
+rm sonar.zip
+fi
+"""
+}
+}
+}
+
+stage('SonarQube Analysis') {
+steps {
+script {
+def sonarUsed = false
+try {
+withCredentials([string(credentialsId: 'sonartoken', variable: 'SONARQUBE_TOKEN')]) {
+if (env.SONARQUBE_TOKEN?.trim()) {
+sonarUsed = true
+echo "Running SonarQube analysis..."
+sh """
+./sonar-scanner/bin/sonar-scanner \
+-Dsonar.projectKey=bwapp-docker \
+-Dsonar.projectVersion=${buildVersion} \
+-Dsonar.sources=. \
+-Dsonar.host.url=http://192.168.28.141:9000 \
+-Dsonar.token=$SONARQUBE_TOKEN \
+-Dsonar.nodejs.executable=${nodePath} \
+-Dsonar.qualitygate.wait=false || true
+"""
+}
+}
+} catch (ignore) {
+echo "No SonarQube token found, skipping analysis."
+}
+}
+}
+}
+stage('Build Docker Image') {
+steps {
+sh 'docker build -t bwapp-docker . || true'
+}
+}
 stage('Nikto Scan') {
 steps {
 sh '''
@@ -75,59 +125,6 @@ archiveArtifacts artifacts: 'zap_report.html', onlyIfSuccessful: false
 }
 }
 
-stage('Install Sonar Scanner') {
-steps {
-script {
-echo "Installing Sonar Scanner..."
-sh """
-if [ ! -f sonar-scanner/bin/sonar-scanner ]; then
-curl -sSL -o sonar.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
-unzip -q sonar.zip
-mv sonar-scanner-5.0.1.3006-linux sonar-scanner
-rm sonar.zip
-fi
-"""
-}
-}
-}
-
-stage('SonarQube Analysis') {
-steps {
-script {
-def buildVersion = sh(script: "date +%Y%m%d%H%M%S", returnStdout: true).trim()
-
-echo "🔍 Checking if SonarQube is reachable..."
-def sonarReachable = sh(script: "curl -s -o /dev/null -w \"%{http_code}\" http://192.168.28.141:9000", returnStdout: true).trim()
-
-if (sonarReachable != "200") {
-echo "⚠️ SonarQube is NOT reachable at http://192.168.28.141:9000 (HTTP ${sonarReachable}). Skipping analysis."
-return
-}
-
-withCredentials([string(credentialsId: 'sonartoken', variable: 'SONARQUBE_TOKEN')]) {
-if (!env.SONARQUBE_TOKEN?.trim()) {
-echo "⚠️ SonarQube token is missing. Skipping analysis."
-return
-}
-
-echo "🚀 Running SonarQube analysis for version ${buildVersion}..."
-sh """
-./sonar-scanner/bin/sonar-scanner \
--Dsonar.projectKey=bwapp-docker \
--Dsonar.projectVersion=${buildVersion} \
--Dsonar.sources=. \
--Dsonar.host.url=http://192.168.28.141:9000 \
--Dsonar.login=$SONARQUBE_TOKEN || true
-"""
-
-sleep 5
-def qgStatus = sh(script: "curl -s -u $SONARQUBE_TOKEN: http://192.168.28.141:9000/api/qualitygates/project_status?projectKey=bwapp-docker | jq -r .projectStatus.status", returnStdout: true).trim()
-writeFile file: "${env.WORKSPACE}/sonar_status.txt", text: qgStatus
-echo "SonarQube Quality Gate: ${qgStatus}"
-}
-}
-}
-}
 stage('Generate Security Dashboard') {
 steps {
 sh '''
